@@ -33,6 +33,9 @@ from blacs.device_base_class import DeviceTab
 import labscript_utils.properties
 from labscript_utils.ls_zprocess import ZMQServer
 
+from influxdb import InfluxDBClient
+import time
+
 
 
 
@@ -50,13 +53,30 @@ class ImageReceiver(ZMQServer):
     """ZMQServer that receives images on a zmq.REP socket, replies 'ok', and updates the
     image widget and fps indicator"""
 
-    def __init__(self, image_view, label_fps):
+    def __init__(self, image_view, label_fps,camera_name=''):
         ZMQServer.__init__(self, port=None, dtype='multipart')
         self.image_view = image_view
         self.label_fps = label_fps
         self.last_frame_time = None
         self.frame_rate = None
         self.update_event = None
+
+        # default ROI
+        self.image_view.ui.roiBtn.setChecked(True)
+        self.image_view.ui.roiPlot.showGrid(x=True,y=True, alpha=1)
+        self.image_view.roiClicked()
+        self.image_view.roi.setPos(100,390)
+        self.image_view.roi.setSize((270,50))
+        self.image_view.roi.setAngle(90)
+        self.camera_name = camera_name
+        
+        # initialise influx db        
+        self.influx_client = InfluxDBClient(host="128.138.107.173",database="thompsonlab",timeout=30)
+        self.t0 = time.time()
+        self.log_roisum_max = False
+        
+    def toggle_log_roisum_max(self):
+        self.log_roisum_max = not self.log_roisum_max
 
     @inmain_decorator(wait_for_return=True)
     def handler(self, data):
@@ -83,11 +103,24 @@ class ImageReceiver(ZMQServer):
         if self.image_view.image is None:
             # First time setting an image. Do autoscaling etc:
             self.image_view.setImage(image.swapaxes(-1, -2))
+            # self.image_view.setImage(image.swapaxes(0, 0))
+            self.image_view.setLevels(880,4000)
         else:
             # Updating image. Keep zoom/pan/levels/etc settings.
             self.image_view.setImage(
                 image.swapaxes(-1, -2), autoRange=False, autoLevels=False
             )
+            t1 = time.time()
+            if self.log_roisum_max:
+                if t1-self.t0 >= 10:
+                    self.t0=t1
+                    roi_plot_widget = self.image_view.getRoiPlot()
+                    roi_plot_item = roi_plot_widget.getPlotItem()
+                    #roi_plot_item.writeCsv(fileName='roisumtest.csv')
+                    x,roi_curve_data = roi_plot_item.curves[-1].getData()
+                    roi_sum_max = max(roi_curve_data)
+                    point = {"measurement":self.camera_name,"fields":{"roisum_max":roi_sum_max}}
+                    self.influx_client.write_points([point])
         # Update fps indicator:
         if self.frame_rate is not None:
             self.label_fps.setText(f"{self.frame_rate:.01f} fps")
@@ -124,6 +157,7 @@ class IMAQdxCameraTab(DeviceTab):
         )
         self.ui = UiLoader().load(ui_filepath)
         self.ui.pushButton_continuous.clicked.connect(self.on_continuous_clicked)
+        self.ui.pushButton_log_roisum_max.toggled.connect(self.on_log_roisum_max_clicked)
         self.ui.pushButton_stop.clicked.connect(self.on_stop_clicked)
         self.ui.pushButton_snap.clicked.connect(self.on_snap_clicked)
         self.ui.pushButton_attributes.clicked.connect(self.on_attributes_clicked)
@@ -163,10 +197,11 @@ class IMAQdxCameraTab(DeviceTab):
                 widget.setSizePolicy(size_policy)
 
         # Start the image receiver ZMQ server:
-        self.image_receiver = ImageReceiver(self.image, self.ui.label_fps)
+        self.image_receiver = ImageReceiver(self.image, self.ui.label_fps, camera_name=self.device_name)
         self.acquiring = False
 
         self.supports_smart_programming(self.use_smart_programming) 
+
 
     def get_save_data(self):
         return {
@@ -233,6 +268,9 @@ class IMAQdxCameraTab(DeviceTab):
     def on_attr_visibility_level_changed(self, value):
         self.attributes_dialog.plainTextEdit.setPlainText("Reading attributes...")
         self.update_attributes()
+        
+    def on_log_roisum_max_clicked(self, button):
+        self.image_receiver.toggle_log_roisum_max()
 
     def on_continuous_clicked(self, button):
         self.ui.pushButton_snap.setEnabled(False)
