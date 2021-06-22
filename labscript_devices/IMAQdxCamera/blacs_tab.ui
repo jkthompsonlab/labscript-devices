@@ -155,6 +155,22 @@
          </property>
         </spacer>
        </item>
+       <item>
+        <widget class="QPushButton" name="pushButton_log_roisum_max">
+         <property name="toolTip">
+          <string>Log roisum maximum to influxdb</string>
+         </property>
+         <property name="text">
+          <string>Log roisum max</string>
+         </property>
+         <property name="checkable">
+          <bool>true</bool>
+         </property>
+         <property name="checked">
+          <bool>false</bool>
+         </property>
+        </widget>
+       </item>
       </layout>
      </item>
     </layout>
