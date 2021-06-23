@@ -167,7 +167,33 @@
           <bool>true</bool>
          </property>
          <property name="checked">
+          <bool>true</bool>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <widget class="QPushButton" name="pushButton_fit_roisum">
+         <property name="toolTip">
+          <string>Fit and log roisum parameters to influxdb</string>
+         </property>
+         <property name="text">
+          <string>Fit roisum</string>
+         </property>
+         <property name="checkable">
+          <bool>true</bool>
+         </property>
+         <property name="checked">
           <bool>false</bool>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <widget class="QPushButton" name="pushButton_save_roisum">
+         <property name="toolTip">
+          <string>Save roisum trace to csv file</string>
+         </property>
+         <property name="text">
+          <string>Save roisum trace</string>
          </property>
         </widget>
        </item>

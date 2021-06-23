@@ -33,7 +33,9 @@ from blacs.device_base_class import DeviceTab
 import labscript_utils.properties
 from labscript_utils.ls_zprocess import ZMQServer
 
-from influxdb import InfluxDBClient
+#from influxdb import InfluxDBClient
+from strontium_library.tools.fitting import fit_gaussian_sum
+from strontium_library.tools.logging import InfluxLogger
 import time
 
 
@@ -71,12 +73,23 @@ class ImageReceiver(ZMQServer):
         self.camera_name = camera_name
         
         # initialise influx db        
-        self.influx_client = InfluxDBClient(host="128.138.107.173",database="thompsonlab",timeout=30)
+        self.logger = InfluxLogger()
         self.t0 = time.time()
-        self.log_roisum_max = False
+        self.log_roisum_max = True
+        self.fit_roisum = False
+        self.saved_images_counter = 0
         
     def toggle_log_roisum_max(self):
         self.log_roisum_max = not self.log_roisum_max
+        
+    def toggle_fit_roisum(self):
+        self.fit_roisum = not self.fit_roisum
+        
+    def save_roisum_max_to_file(self):
+        roi_plot_widget = self.image_view.getRoiPlot()
+        roi_plot_item = roi_plot_widget.getPlotItem()
+        roi_plot_item.writeCsv(fileName='roisum_{}_{}.csv'.format(self.camera_name,str(self.saved_images_counter)))
+        self.saved_images_counter += 1
 
     @inmain_decorator(wait_for_return=True)
     def handler(self, data):
@@ -111,16 +124,22 @@ class ImageReceiver(ZMQServer):
                 image.swapaxes(-1, -2), autoRange=False, autoLevels=False
             )
             t1 = time.time()
-            if self.log_roisum_max:
-                if t1-self.t0 >= 10:
-                    self.t0=t1
+            if t1-self.t0 >= 10:
+                self.t0=t1
+                if self.log_roisum_max or self.fit_roisum:
                     roi_plot_widget = self.image_view.getRoiPlot()
                     roi_plot_item = roi_plot_widget.getPlotItem()
-                    #roi_plot_item.writeCsv(fileName='roisumtest.csv')
                     x,roi_curve_data = roi_plot_item.curves[-1].getData()
-                    roi_sum_max = max(roi_curve_data)
-                    point = {"measurement":self.camera_name,"fields":{"roisum_max":roi_sum_max}}
-                    self.influx_client.write_points([point])
+                    if self.log_roisum_max:
+                        roi_sum_max = max(roi_curve_data)
+                        self.logger.log_data(self.camera_name,"roisum_max",roi_sum_max)
+                    if self.fit_roisum:
+                        popt,perr,p_names = fit_gaussian_sum(roi_curve_data)
+                        for name,par,par_err in zip(p_names,popt,perr):
+                            self.logger.log_data(self.camera_name,name,par)
+                            self.logger.log_data(self.camera_name,name+'_err',par_err)
+                    
+                    
         # Update fps indicator:
         if self.frame_rate is not None:
             self.label_fps.setText(f"{self.frame_rate:.01f} fps")
@@ -158,6 +177,8 @@ class IMAQdxCameraTab(DeviceTab):
         self.ui = UiLoader().load(ui_filepath)
         self.ui.pushButton_continuous.clicked.connect(self.on_continuous_clicked)
         self.ui.pushButton_log_roisum_max.toggled.connect(self.on_log_roisum_max_clicked)
+        self.ui.pushButton_fit_roisum.toggled.connect(self.on_fit_roisum_clicked)
+        self.ui.pushButton_save_roisum.clicked.connect(self.on_save_roisum_clicked)
         self.ui.pushButton_stop.clicked.connect(self.on_stop_clicked)
         self.ui.pushButton_snap.clicked.connect(self.on_snap_clicked)
         self.ui.pushButton_attributes.clicked.connect(self.on_attributes_clicked)
@@ -271,6 +292,12 @@ class IMAQdxCameraTab(DeviceTab):
         
     def on_log_roisum_max_clicked(self, button):
         self.image_receiver.toggle_log_roisum_max()
+        
+    def on_fit_roisum_clicked(self, button):
+        self.image_receiver.toggle_fit_roisum()
+        
+    def on_save_roisum_clicked(self, button):
+        self.image_receiver.save_roisum_max_to_file()
 
     def on_continuous_clicked(self, button):
         self.ui.pushButton_snap.setEnabled(False)
