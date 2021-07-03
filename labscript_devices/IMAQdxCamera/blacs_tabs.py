@@ -36,6 +36,7 @@ from labscript_utils.ls_zprocess import ZMQServer
 #from influxdb import InfluxDBClient
 from strontium_library.tools.fitting import fit_gaussian_sum
 from strontium_library.tools.logging import InfluxLogger
+from pyqtgraph import Point
 import time
 
 
@@ -55,22 +56,27 @@ class ImageReceiver(ZMQServer):
     """ZMQServer that receives images on a zmq.REP socket, replies 'ok', and updates the
     image widget and fps indicator"""
 
-    def __init__(self, image_view, label_fps,camera_name=''):
+    def __init__(self, image_view, label_fps,camera_name='',label_roi_pos = '',
+                 label_roi_size = '',label_roi_angle = ''):
         ZMQServer.__init__(self, port=None, dtype='multipart')
         self.image_view = image_view
         self.label_fps = label_fps
         self.last_frame_time = None
         self.frame_rate = None
         self.update_event = None
+        self.label_roi_pos = label_roi_pos
+        self.label_roi_size = label_roi_size
+        self.label_roi_angle = label_roi_angle
 
         # default ROI
         self.image_view.ui.roiBtn.setChecked(True)
         self.image_view.ui.roiPlot.showGrid(x=True,y=True, alpha=1)
         self.image_view.roiClicked()
-        self.image_view.roi.setPos(100,390)
-        self.image_view.roi.setSize((270,50))
-        self.image_view.roi.setAngle(90)
         self.camera_name = camera_name
+        self.update_roi_coord_display()
+        
+        # print current roi
+        self.image_view.roi.sigRegionChangeFinished.connect(self.update_roi_coord_display)
         
         # initialise influx db        
         self.logger = InfluxLogger()
@@ -84,6 +90,12 @@ class ImageReceiver(ZMQServer):
         
     def toggle_fit_roisum(self):
         self.fit_roisum = not self.fit_roisum
+        
+    def update_roi_coord_display(self):
+        roi_state = self.image_view.roi.getState()
+        self.label_roi_pos.setText("Roi position x:{:.0f}, y:{:.0f}".format(roi_state['pos'][0],roi_state['pos'][1]))
+        self.label_roi_size.setText("Roi size x:{:.0f}, y:{:.0f}".format(roi_state['size'][0],roi_state['size'][1]))
+        self.label_roi_angle.setText("Roi angle:{:.0f}".format(roi_state['angle']))
         
     def save_roisum_max_to_file(self):
         roi_plot_widget = self.image_view.getRoiPlot()
@@ -124,7 +136,7 @@ class ImageReceiver(ZMQServer):
                 image.swapaxes(-1, -2), autoRange=False, autoLevels=False
             )
             t1 = time.time()
-            if t1-self.t0 >= 10:
+            if t1-self.t0 >= 1:
                 self.t0=t1
                 if self.log_roisum_max or self.fit_roisum:
                     roi_plot_widget = self.image_view.getRoiPlot()
@@ -218,18 +230,26 @@ class IMAQdxCameraTab(DeviceTab):
                 widget.setSizePolicy(size_policy)
 
         # Start the image receiver ZMQ server:
-        self.image_receiver = ImageReceiver(self.image, self.ui.label_fps, camera_name=self.device_name)
+        self.image_receiver = ImageReceiver(self.image, self.ui.label_fps, 
+                                            camera_name=self.device_name,
+                                            label_roi_pos = self.ui.label_roi_pos,
+                                            label_roi_size = self.ui.label_roi_size,
+                                            label_roi_angle = self.ui.label_roi_angle)
         self.acquiring = False
 
         self.supports_smart_programming(self.use_smart_programming) 
 
 
     def get_save_data(self):
+        roi_coords = self.image_receiver.image_view.roi.getState()
+        roi_coords_vec = [roi_coords['pos'][0],roi_coords['pos'][1],roi_coords['size'][0],
+                          roi_coords['size'][1],roi_coords['angle']]
         return {
             'attribute_visibility': self.attributes_dialog.comboBox.currentText(),
             'acquiring': self.acquiring,
             'max_rate': self.ui.doubleSpinBox_maxrate.value(),
-            'colormap': repr(self.image.ui.histogram.gradient.saveState())
+            'colormap': repr(self.image.ui.histogram.gradient.saveState()),
+            'roi_coordinates': roi_coords_vec
         }
 
     def restore_save_data(self, save_data):
@@ -244,6 +264,11 @@ class IMAQdxCameraTab(DeviceTab):
             self.image.ui.histogram.gradient.restoreState(
                 ast.literal_eval(save_data['colormap'])
             )
+        if 'roi_coordinates' in save_data:
+            roi_coords = save_data['roi_coordinates']
+            roi_state = {'pos':Point(roi_coords[0],roi_coords[1]),
+                         'size':Point(roi_coords[2],roi_coords[3]),'angle':roi_coords[4]}
+            self.image_receiver.image_view.roi.setState(roi_state)
 
 
     def initialise_workers(self):
